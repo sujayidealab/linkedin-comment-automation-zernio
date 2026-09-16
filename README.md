@@ -1,4 +1,22 @@
+# LinkedIn comment automation (Zernio)
+
+Watches **every LinkedIn post** on the connected Zernio account and auto-replies to new top-level comments. A worker runs every **2 minutes**.
+
+```bash
+python3 -m pip install -r requirements.txt
+cp .env.example .env   # set ZERNIO_API_KEY
+python3 scripts/linkedin_comment_cron.py --once --dry-run
+python3 scripts/linkedin_comment_cron.py          # live loop, 120s
+npm install
+npm run dev -- --hostname 0.0.0.0 --port 43147
+```
+
+The dashboard shows last run, queued comments, and sent replies. The worker skips your own comments and threads you already answered.
+
+Do not commit `.env`. Rotate the key if it was pasted in chat.
+
 # LinkedIn skills + Zernio MCP
+
 
 A Cursor-ready fork of [sergebulaev/linkedin-skills](https://github.com/sergebulaev/linkedin-skills): 11 LinkedIn content skills (draft → approve → publish) wired to **Zernio** instead of Publora and Apify.
 

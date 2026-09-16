@@ -14,6 +14,7 @@ import os
 import random
 import time
 from typing import Any, Optional
+from urllib.parse import quote
 
 import requests
 
@@ -112,7 +113,7 @@ class ZernioClient:
             raise ZernioError(
                 "No LinkedIn account id. Connect LinkedIn in Zernio or set ZERNIO_LINKEDIN_ACCOUNT_ID."
             )
-        post_id = _linkedin_post_id(post_urn)
+        post_id = quote(_linkedin_post_id(post_urn), safe="")
         body: dict[str, Any] = {"accountId": account_id, "message": message}
         if parent_comment:
             body["commentId"] = _linkedin_comment_id(parent_comment)
@@ -127,7 +128,7 @@ class ZernioClient:
         account_id: Optional[str] = None,
     ) -> dict[str, Any]:
         account_id = account_id or platform_id or self.resolve_linkedin_account_id()
-        post_id = _linkedin_post_id(post_urn)
+        post_id = quote(_linkedin_post_id(post_urn), safe="")
         r = self._session.delete(
             f"{self.BASE_URL}/inbox/comments/{post_id}",
             params={"accountId": account_id, "commentId": comment_id},
@@ -249,6 +250,34 @@ class ZernioClient:
         rows = payload.get("posts") or payload.get("data") or []
         return rows if isinstance(rows, list) else []
 
+    def list_inbox_posts(self, *, platform: str = "linkedin", limit: int = 50) -> list[dict[str, Any]]:
+        account_id = self.resolve_linkedin_account_id()
+        params: dict[str, Any] = {"platform": platform, "limit": min(limit, 100)}
+        if account_id:
+            params["accountId"] = account_id
+        r = self._session.get(
+            f"{self.BASE_URL}/inbox/comments", params=params, timeout=self.timeout
+        )
+        payload = self._handle(r)
+        rows = payload.get("data") or payload.get("posts") or []
+        return rows if isinstance(rows, list) else []
+
+    def get_inbox_comments_raw(
+        self, post_id: str, *, max_items: int = 100
+    ) -> list[dict[str, Any]]:
+        account_id = self.resolve_linkedin_account_id()
+        if not account_id:
+            return []
+        pid = quote(_linkedin_post_id(post_id), safe="")
+        r = self._session.get(
+            f"{self.BASE_URL}/inbox/comments/{pid}",
+            params={"accountId": account_id, "limit": min(max_items, 100)},
+            timeout=self.timeout,
+        )
+        payload = self._handle(r)
+        comments = payload.get("comments") or payload.get("data") or []
+        return comments if isinstance(comments, list) else []
+
     def fetch_post(self, post_url: str, *, force_refresh: bool = False) -> dict[str, Any]:
         """Best-effort post body from connected LinkedIn data or inbox comments."""
         del force_refresh
@@ -302,7 +331,7 @@ class ZernioClient:
         account_id = self.resolve_linkedin_account_id()
         if not account_id:
             return []
-        pid = _linkedin_post_id(post_id)
+        pid = quote(_linkedin_post_id(post_id), safe="")
         r = self._session.get(
             f"{self.BASE_URL}/inbox/comments/{pid}",
             params={"accountId": account_id, "limit": min(max_items, 100)},

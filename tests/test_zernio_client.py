@@ -46,7 +46,7 @@ class FetchCommentsHttp(unittest.TestCase):
             rows = client.fetch_post_comments(post_id="urn:li:activity:9", max_items=10)
         self.assertEqual(rows[0]["authorName"], "Ada")
         args, kwargs = client._session.get.call_args
-        self.assertIn("/inbox/comments/urn:li:activity:9", args[0])
+        self.assertIn("inbox/comments/urn%3Ali%3Aactivity%3A9", args[0])
         self.assertEqual(kwargs["params"]["accountId"], "acc1")
 
 
