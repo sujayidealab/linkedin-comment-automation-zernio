@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "LinkedIn comment automation",
-  description: "Auto-reply to comments on every LinkedIn post via Zernio, every 2 minutes.",
+  description: "Auto-reply to comments on every LinkedIn post via Zernio.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

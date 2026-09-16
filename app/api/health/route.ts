@@ -26,6 +26,6 @@ export async function GET() {
     enabled,
     lastRunAt,
     handled,
-    intervalSeconds: Number(process.env.COMMENT_AUTOMATION_INTERVAL_SECONDS || 120),
+    intervalSeconds: Number(process.env.COMMENT_AUTOMATION_INTERVAL_SECONDS || 30),
   });
 }
