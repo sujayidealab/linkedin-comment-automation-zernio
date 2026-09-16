@@ -2,10 +2,10 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
-PORT="${PORT:-43147}"
+PORT="${PORT:-8080}"
 
-if [[ ! -f .env ]]; then
-  echo "Missing .env — copy .env.example and set ZERNIO_API_KEY" >&2
+if [[ -z "${ZERNIO_API_KEY:-}" && ! -f .env ]]; then
+  echo "ZERNIO_API_KEY is not set. Add it as a Railway variable or put it in .env" >&2
   exit 1
 fi
 
@@ -22,5 +22,5 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 echo "Comment worker pid $CRON_PID"
-echo "App http://0.0.0.0:${PORT}"
+echo "App 0.0.0.0:${PORT}"
 exec npx next start --hostname 0.0.0.0 --port "$PORT"

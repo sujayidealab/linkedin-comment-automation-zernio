@@ -1,0 +1,9 @@
+# Local env (never commit)
+.env
+.env.*
+!.env.example
+
+# Railway / Docker
+node_modules
+.next
+data/automation-state.json
