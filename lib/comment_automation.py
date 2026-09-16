@@ -1,16 +1,22 @@
 """Reply to new LinkedIn comments on every connected post."""
 from __future__ import annotations
 
-import json
-import os
-import random
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+import json
+import os
+import random
+import re
+import time
 
 from ._env import load_env
 from .zernio_client import ZernioClient, ZernioError
+
+ACTIVITY_URN = re.compile(r"urn:li:activity:\d+")
+SHARE_URN = re.compile(r"urn:li:share:\d+")
+COMMENT_URN = re.compile(r"urn:li:comment:\([^)]+\)")
+
 
 ROOT = Path(__file__).resolve().parents[1]
 STATE_PATH = ROOT / "data" / "automation-state.json"
@@ -82,8 +88,54 @@ def _compose_reply(from_: dict[str, Any]) -> str:
     return template.format(name=_first_name(from_))
 
 
+def _urns_in(text: str) -> set[str]:
+    return set(ACTIVITY_URN.findall(text or "")) | set(SHARE_URN.findall(text or ""))
+
+
+def activity_urn_from_comment_id(comment_id: str) -> str | None:
+    found = ACTIVITY_URN.findall(comment_id or "")
+    return found[0] if found else None
+
+
+def _lookup_ids(post_id: str, aliases: dict[str, list[str]], comments: list[dict[str, Any]]) -> list[str]:
+    ids: list[str] = []
+    for value in [post_id, *aliases.get(post_id, [])]:
+        if value and value not in ids:
+            ids.append(value)
+    blob = " ".join(str(c.get("id") or "") for c in comments)
+    for urn in _urns_in(blob):
+        if urn not in ids:
+            ids.append(urn)
+    return ids
+
+
+def load_comments_for_post(
+    client: ZernioClient, post_id: str, aliases: dict[str, list[str]]
+) -> tuple[list[dict[str, Any]], str]:
+    """LinkedIn share URNs can lag; activity URNs have the live thread."""
+    merged: dict[str, dict[str, Any]] = {}
+    ids = _lookup_ids(post_id, aliases, [])
+    for ident in ids:
+        for comment in client.get_inbox_comments_raw(ident, max_items=100):
+            cid = str(comment.get("id") or "")
+            if cid:
+                merged[cid] = comment
+    extra = _lookup_ids(post_id, aliases, list(merged.values()))
+    for ident in extra:
+        if ident in ids:
+            continue
+        for comment in client.get_inbox_comments_raw(ident, max_items=100):
+            cid = str(comment.get("id") or "")
+            if cid:
+                merged[cid] = comment
+        ids.append(ident)
+    reply_post_id = next((i for i in ids if i.startswith("urn:li:activity:")), post_id)
+    return list(merged.values()), reply_post_id
+
+
 def collect_targets(client: ZernioClient, state: dict[str, Any]) -> list[dict[str, Any]]:
     replied = set(state.get("repliedCommentIds") or [])
+    aliases: dict[str, list[str]] = state.setdefault("postAliases", {})
     targets: list[dict[str, Any]] = []
     posts = client.list_inbox_posts(platform="linkedin", limit=50)
     published = client.list_posts(platform="linkedin", limit=50)
@@ -113,7 +165,11 @@ def collect_targets(client: ZernioClient, state: dict[str, Any]) -> list[dict[st
         post_id = str(post.get("id") or "")
         if not post_id:
             continue
-        comments = client.get_inbox_comments_raw(post_id, max_items=100)
+        comments, reply_post_id = load_comments_for_post(client, post_id, aliases)
+        learned = sorted(
+            {reply_post_id, *(_urns_in(" ".join(str(c.get("id") or "") for c in comments)))}
+        )
+        aliases[post_id] = learned
         for comment in comments:
             cid = str(comment.get("id") or "")
             if not cid or cid in replied:
@@ -129,7 +185,7 @@ def collect_targets(client: ZernioClient, state: dict[str, Any]) -> list[dict[st
                 continue
             targets.append(
                 {
-                    "postId": post_id,
+                    "postId": activity_urn_from_comment_id(cid) or reply_post_id,
                     "postPreview": (post.get("content") or "")[:160],
                     "permalink": post.get("permalink"),
                     "commentId": cid,
@@ -139,6 +195,7 @@ def collect_targets(client: ZernioClient, state: dict[str, Any]) -> list[dict[st
                 }
             )
     state["repliedCommentIds"] = sorted(replied)
+    state["postAliases"] = aliases
     return targets
 
 
