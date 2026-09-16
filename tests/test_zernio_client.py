@@ -48,6 +48,7 @@ class FetchCommentsHttp(unittest.TestCase):
         args, kwargs = client._session.get.call_args
         self.assertIn("inbox/comments/urn%3Ali%3Aactivity%3A9", args[0])
         self.assertEqual(kwargs["params"]["accountId"], "acc1")
+        self.assertIn("limit", kwargs["params"])
 
 
 if __name__ == "__main__":

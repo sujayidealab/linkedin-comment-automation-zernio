@@ -11,7 +11,7 @@ npm install
 npm run dev -- --hostname 0.0.0.0 --port 43147
 ```
 
-The dashboard lists the **last 5 comments it replied to**. The worker skips your own comments and threads you already answered. It fetches both LinkedIn share and activity URNs because the share inbox can lag.
+The worker checks every 30 seconds, fetches both share and activity URNs, and skips threads it already answered. State is file-locked and capped so it can run 24/7 on Railway without unbounded growth. Extra posts: `ZERNIO_POST_PAIRS=share|activity,share|activity`.
 
 Copy `.env.example` to `.env` and put your Zernio key in it. Do not commit `.env` — GitHub would expose the key. On Railway, set the same names as Variables.
 

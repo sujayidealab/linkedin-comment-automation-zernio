@@ -22,9 +22,12 @@ COMMENT_URN = re.compile(r"urn:li:comment:\([^)]+\)")
 ROOT = Path(__file__).resolve().parents[1]
 STATE_PATH = ROOT / "data" / "automation-state.json"
 LOCK_PATH = ROOT / "data" / "automation-state.lock"
+MAX_REPLIED_IDS = 20000
+MAX_RUNS = 40
+MAX_RECENT = 5
 
 # Share inbox listings lag; always also fetch the matching activity URN.
-KNOWN_POST_PAIRS = [
+DEFAULT_POST_PAIRS = [
     (
         "urn:li:share:7505699050357399554",
         "urn:li:activity:7505699050781073409",
@@ -43,10 +46,41 @@ TEMPLATES = [
     "Appreciate the comment, {name}. Want to share a bit more about what you're building?",
 ]
 
-OWNER_IDS = {
-    os.getenv("ZERNIO_OWNER_PERSON_ID", "X5ie8NmZTi"),
-    "urn:li:person:X5ie8NmZTi",
+DEFAULT_STATE = {
+    "repliedCommentIds": [],
+    "seenCommentIds": [],
+    "lastRunAt": None,
+    "lastError": None,
+    "runs": [],
+    "enabled": True,
+    "recentReplies": [],
+    "postAliases": {},
 }
+
+
+def owner_ids() -> set[str]:
+    pid = os.getenv("ZERNIO_OWNER_PERSON_ID", "X5ie8NmZTi").strip() or "X5ie8NmZTi"
+    return {pid, f"urn:li:person:{pid}", "X5ie8NmZTi", "urn:li:person:X5ie8NmZTi"}
+
+
+def known_post_pairs() -> list[tuple[str, str]]:
+    pairs = list(DEFAULT_POST_PAIRS)
+    extra = os.getenv("ZERNIO_POST_PAIRS", "")
+    for chunk in extra.split(","):
+        chunk = chunk.strip()
+        if "|" not in chunk:
+            continue
+        share, activity = [p.strip() for p in chunk.split("|", 1)]
+        if share and activity:
+            pairs.append((share, activity))
+    # unique, preserve order
+    seen: set[tuple[str, str]] = set()
+    out: list[tuple[str, str]] = []
+    for item in pairs:
+        if item not in seen:
+            seen.add(item)
+            out.append(item)
+    return out
 
 
 def _now() -> str:
@@ -54,17 +88,15 @@ def _now() -> str:
 
 
 def load_state() -> dict[str, Any]:
+    state = dict(DEFAULT_STATE)
     if STATE_PATH.is_file():
-        return json.loads(STATE_PATH.read_text(encoding="utf-8"))
-    return {
-        "repliedCommentIds": [],
-        "seenCommentIds": [],
-        "lastRunAt": None,
-        "lastError": None,
-        "runs": [],
-        "enabled": True,
-        "recentReplies": [],
-    }
+        try:
+            loaded = json.loads(STATE_PATH.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                state.update(loaded)
+        except json.JSONDecodeError:
+            pass
+    return state
 
 
 def recent_replies(state: dict[str, Any]) -> list[dict[str, Any]]:
@@ -93,7 +125,15 @@ def recent_replies(state: dict[str, Any]) -> list[dict[str, Any]]:
 
 def save_state(state: dict[str, Any]) -> None:
     STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    STATE_PATH.write_text(json.dumps(state, indent=2), encoding="utf-8")
+    ids = list(dict.fromkeys(state.get("repliedCommentIds") or []))
+    if len(ids) > MAX_REPLIED_IDS:
+        ids = ids[-MAX_REPLIED_IDS:]
+    state["repliedCommentIds"] = ids
+    state["runs"] = list(state.get("runs") or [])[:MAX_RUNS]
+    state["recentReplies"] = list(state.get("recentReplies") or [])[:MAX_RECENT]
+    tmp = STATE_PATH.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(state, indent=2), encoding="utf-8")
+    tmp.replace(STATE_PATH)
 
 
 def _state_lock():
@@ -104,7 +144,7 @@ def _state_lock():
 
 
 def seed_aliases(aliases: dict[str, list[str]]) -> dict[str, list[str]]:
-    for share, activity in KNOWN_POST_PAIRS:
+    for share, activity in known_post_pairs():
         learned = sorted({share, activity, *(aliases.get(share) or []), *(aliases.get(activity) or [])})
         aliases[share] = learned
         aliases[activity] = learned
@@ -117,9 +157,10 @@ def _person_id(from_: dict[str, Any]) -> str:
 
 def _is_owner(from_: dict[str, Any]) -> bool:
     pid = _person_id(from_)
-    if pid in OWNER_IDS:
+    owners = owner_ids()
+    if pid in owners:
         return True
-    if pid.endswith("X5ie8NmZTi"):
+    if any(pid.endswith(oid) for oid in owners if not oid.startswith("urn:")):
         return True
     name = (from_.get("name") or "").lower()
     return name == "sujay viston"
@@ -224,29 +265,37 @@ def collect_targets(client: ZernioClient, state: dict[str, Any]) -> list[dict[st
                         "commentCount": 0,
                     }
                 )
-    for share, activity in KNOWN_POST_PAIRS:
+    for share, activity in known_post_pairs():
         for pid in (activity, share):
             if pid not in seen_ids:
                 seen_ids.add(pid)
                 feed.append({"id": pid, "content": "", "permalink": None, "commentCount": 0})
 
+    fetched: set[str] = set()
+    seen_targets: set[str] = set()
     for post in feed:
         post_id = str(post.get("id") or "")
-        if not post_id:
+        if not post_id or post_id in fetched:
+            continue
+        lookup = _lookup_ids(post_id, aliases, [])
+        if fetched.intersection(lookup):
+            fetched.update(lookup)
             continue
         comments, reply_post_id = load_comments_for_post(client, post_id, aliases)
         learned = sorted(
             {
                 post_id,
                 reply_post_id,
+                *lookup,
                 *(_urns_in(" ".join(str(c.get("id") or "") for c in comments))),
             }
         )
+        fetched.update(learned)
         for urn in learned:
             aliases[urn] = learned
         for comment in comments:
             cid = str(comment.get("id") or "")
-            if not cid or cid in replied:
+            if not cid or cid in replied or cid in seen_targets:
                 continue
             from_ = comment.get("from") or {}
             if _is_owner(from_):
@@ -257,6 +306,7 @@ def collect_targets(client: ZernioClient, state: dict[str, Any]) -> list[dict[st
             text = (comment.get("message") or comment.get("text") or "").strip()
             if not text:
                 continue
+            seen_targets.add(cid)
             targets.append(
                 {
                     "postId": activity_urn_from_comment_id(cid) or reply_post_id,
@@ -320,7 +370,7 @@ def _run_once_locked(*, dry_run: bool = False, max_replies: int = 20) -> dict[st
                 )
                 state.setdefault("repliedCommentIds", []).append(item["commentId"])
                 sent.append(item)
-                time.sleep(2.5)
+                time.sleep(float(os.getenv("COMMENT_REPLY_DELAY_SECONDS", "2.5")))
             except ZernioError as exc:
                 errors.append(f"{item['commentId']}: {exc}")
     else:
@@ -361,7 +411,7 @@ def _run_once_locked(*, dry_run: bool = False, max_replies: int = 20) -> dict[st
         ],
     }
     state.setdefault("runs", [])
-    state["runs"] = ([run_row] + state["runs"])[:25]
+    state["runs"] = ([run_row] + state["runs"])[:MAX_RUNS]
     save_state(state)
     return {
         "ok": not errors,
@@ -375,10 +425,15 @@ def _run_once_locked(*, dry_run: bool = False, max_replies: int = 20) -> dict[st
 
 
 def set_enabled(enabled: bool) -> dict[str, Any]:
-    state = load_state()
-    state["enabled"] = bool(enabled)
-    save_state(state)
-    return {"enabled": state["enabled"]}
+    lock = _state_lock()
+    try:
+        state = load_state()
+        state["enabled"] = bool(enabled)
+        save_state(state)
+        return {"enabled": state["enabled"]}
+    finally:
+        fcntl.flock(lock, fcntl.LOCK_UN)
+        lock.close()
 
 
 def snapshot() -> dict[str, Any]:

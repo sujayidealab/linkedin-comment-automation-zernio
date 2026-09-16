@@ -16,6 +16,7 @@ COPY . .
 RUN npm run build
 
 ENV NODE_ENV=production
+ENV PYTHONUNBUFFERED=1
 EXPOSE 8080
 
 CMD ["bash", "scripts/start-production.sh"]

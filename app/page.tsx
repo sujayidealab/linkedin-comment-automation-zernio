@@ -66,7 +66,6 @@ export default function Home() {
   }, [applyStatus]);
 
   useEffect(() => {
-    void refresh();
     const poll = setInterval(() => {
       void refresh();
     }, 3000);
