@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "zernio": {
+      "url": "https://mcp.zernio.com/mcp",
+      "headers": {
+        "Authorization": "Bearer ${ZERNIO_API_KEY}"
+      }
+    }
+  }
+}

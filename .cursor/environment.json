@@ -1,0 +1,9 @@
+{
+  "name": "linkedin-skills-zernio",
+  "install": "python3 -m pip install -r requirements.txt",
+  "mcpServers": {
+    "zernio": {
+      "url": "https://mcp.zernio.com/mcp"
+    }
+  }
+}
