@@ -49,7 +49,32 @@ def load_state() -> dict[str, Any]:
         "lastError": None,
         "runs": [],
         "enabled": True,
+        "recentReplies": [],
     }
+
+
+def recent_replies(state: dict[str, Any]) -> list[dict[str, Any]]:
+    stored = state.get("recentReplies") or []
+    if stored:
+        return stored[:5]
+    out: list[dict[str, Any]] = []
+    for run in state.get("runs") or []:
+        if run.get("dryRun"):
+            continue
+        if not run.get("replied"):
+            continue
+        for sample in run.get("samples") or []:
+            out.append(
+                {
+                    "at": run.get("at"),
+                    "commenter": sample.get("commenter"),
+                    "comment": sample.get("comment"),
+                    "reply": sample.get("reply"),
+                }
+            )
+            if len(out) >= 5:
+                return out
+    return out
 
 
 def save_state(state: dict[str, Any]) -> None:
@@ -201,19 +226,19 @@ def collect_targets(client: ZernioClient, state: dict[str, Any]) -> list[dict[st
 
 def run_once(*, dry_run: bool = False, max_replies: int = 20) -> dict[str, Any]:
     load_env()
-    enabled = os.getenv("COMMENT_AUTOMATION_ENABLED", "true").lower() not in {
-        "0",
-        "false",
-        "no",
-    }
     state = load_state()
-    if os.getenv("COMMENT_AUTOMATION_ENABLED") is None:
-        enabled = bool(state.get("enabled", True))
+    if "enabled" not in state:
+        state["enabled"] = os.getenv("COMMENT_AUTOMATION_ENABLED", "true").lower() not in {
+            "0",
+            "false",
+            "no",
+        }
+    enabled = bool(state.get("enabled", True))
     if not enabled:
         result = {
             "ok": True,
             "skipped": True,
-            "reason": "automation disabled",
+            "reason": "automation paused from the dashboard",
             "replied": 0,
             "queued": 0,
             "at": _now(),
@@ -241,6 +266,22 @@ def run_once(*, dry_run: bool = False, max_replies: int = 20) -> dict[str, Any]:
                 errors.append(f"{item['commentId']}: {exc}")
     else:
         sent = []
+
+    if sent:
+        new_rows = [
+            {
+                "at": _now(),
+                "commenter": t["commenter"],
+                "comment": t["commentText"][:280],
+                "reply": t["reply"],
+                "permalink": t.get("permalink"),
+                "commentId": t["commentId"],
+            }
+            for t in sent
+        ]
+        state["recentReplies"] = (new_rows + list(state.get("recentReplies") or []))[:5]
+    elif not state.get("recentReplies"):
+        state["recentReplies"] = recent_replies(state)
 
     state["repliedCommentIds"] = sorted(set(state.get("repliedCommentIds") or []))
     state["lastRunAt"] = _now()
@@ -271,4 +312,57 @@ def run_once(*, dry_run: bool = False, max_replies: int = 20) -> dict[str, Any]:
         "errors": errors,
         "targets": targets[:20],
         "at": _now(),
+    }
+
+
+def set_enabled(enabled: bool) -> dict[str, Any]:
+    state = load_state()
+    state["enabled"] = bool(enabled)
+    save_state(state)
+    return {"enabled": state["enabled"]}
+
+
+def snapshot() -> dict[str, Any]:
+    load_env()
+    state = load_state()
+    client = ZernioClient()
+    accounts = [
+        a
+        for a in client.list_accounts()
+        if str(a.get("platform", "")).lower() == "linkedin"
+    ]
+    account = accounts[0] if accounts else {}
+    posts = client.list_inbox_posts(platform="linkedin", limit=50)
+    targets = collect_targets(client, state)
+    save_state(state)
+    unanswered_ids = {t["commentId"] for t in targets}
+    post_rows = []
+    for post in posts:
+        post_rows.append(
+            {
+                "id": post.get("id"),
+                "preview": (post.get("content") or "").strip(),
+                "permalink": post.get("permalink"),
+                "commentCount": post.get("commentCount") or 0,
+                "createdTime": post.get("createdTime"),
+            }
+        )
+    return {
+        "ok": True,
+        "enabled": bool(state.get("enabled", True)),
+        "lastRunAt": state.get("lastRunAt"),
+        "handled": len(state.get("repliedCommentIds") or []),
+        "account": {
+            "id": account.get("_id"),
+            "name": account.get("displayName") or account.get("username"),
+            "username": account.get("username"),
+            "profileUrl": account.get("profileUrl"),
+            "picture": account.get("profilePicture"),
+            "followers": account.get("followersCount"),
+        },
+        "posts": post_rows,
+        "unanswered": targets,
+        "unansweredCount": len(unanswered_ids),
+        "recentReplies": recent_replies(state),
+        "intervalSeconds": int(os.getenv("COMMENT_AUTOMATION_INTERVAL_SECONDS", "120")),
     }

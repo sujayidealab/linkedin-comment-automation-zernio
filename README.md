@@ -11,7 +11,7 @@ npm install
 npm run dev -- --hostname 0.0.0.0 --port 43147
 ```
 
-The dashboard shows last run, queued comments, and sent replies. The worker skips your own comments and threads you already answered.
+The dashboard lists the **last 5 comments it replied to**. The worker skips your own comments and threads you already answered.
 
 Do not commit `.env`. Rotate the key if it was pasted in chat.
 

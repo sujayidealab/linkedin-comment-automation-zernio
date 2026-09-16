@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from lib._env import load_env
-from lib.comment_automation import run_once
+from lib.comment_automation import run_once, snapshot, set_enabled
 
 
 def main() -> int:
@@ -25,6 +25,9 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--once", action="store_true")
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--snapshot", action="store_true")
+    ap.add_argument("--enable", action="store_true")
+    ap.add_argument("--pause", action="store_true")
     ap.add_argument(
         "--interval",
         type=int,
@@ -32,6 +35,15 @@ def main() -> int:
     )
     args = ap.parse_args()
 
+    if args.pause:
+        print(json.dumps(set_enabled(False)))
+        return 0
+    if args.enable:
+        print(json.dumps(set_enabled(True)))
+        return 0
+    if args.snapshot:
+        print(json.dumps(snapshot(), default=str))
+        return 0
     if args.once:
         result = run_once(dry_run=args.dry_run)
         print(json.dumps(result, indent=2, default=str))
