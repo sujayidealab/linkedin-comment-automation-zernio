@@ -13,7 +13,7 @@ npm run dev -- --hostname 0.0.0.0 --port 43147
 
 The dashboard lists the **last 5 comments it replied to**. The worker skips your own comments and threads you already answered. It fetches both LinkedIn share and activity URNs because the share inbox can lag.
 
-Do not commit `.env`. Rotate the key if it was pasted in chat.
+Copy `.env.example` to `.env` and put your Zernio key in it. Do not commit `.env` — GitHub would expose the key. On Railway, set the same names as Variables.
 
 ## Railway (24/7)
 
