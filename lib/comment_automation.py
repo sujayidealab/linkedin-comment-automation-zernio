@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+import fcntl
 import json
 import os
 import random
@@ -20,6 +21,19 @@ COMMENT_URN = re.compile(r"urn:li:comment:\([^)]+\)")
 
 ROOT = Path(__file__).resolve().parents[1]
 STATE_PATH = ROOT / "data" / "automation-state.json"
+LOCK_PATH = ROOT / "data" / "automation-state.lock"
+
+# Share inbox listings lag; always also fetch the matching activity URN.
+KNOWN_POST_PAIRS = [
+    (
+        "urn:li:share:7505699050357399554",
+        "urn:li:activity:7505699050781073409",
+    ),
+    (
+        "urn:li:share:7505696027887357954",
+        "urn:li:activity:7505696030609473536",
+    ),
+]
 
 TEMPLATES = [
     "{name}, thanks for jumping in. What's the piece of this that's been hardest on your side?",
@@ -82,6 +96,21 @@ def save_state(state: dict[str, Any]) -> None:
     STATE_PATH.write_text(json.dumps(state, indent=2), encoding="utf-8")
 
 
+def _state_lock():
+    LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    handle = open(LOCK_PATH, "a+", encoding="utf-8")
+    fcntl.flock(handle, fcntl.LOCK_EX)
+    return handle
+
+
+def seed_aliases(aliases: dict[str, list[str]]) -> dict[str, list[str]]:
+    for share, activity in KNOWN_POST_PAIRS:
+        learned = sorted({share, activity, *(aliases.get(share) or []), *(aliases.get(activity) or [])})
+        aliases[share] = learned
+        aliases[activity] = learned
+    return aliases
+
+
 def _person_id(from_: dict[str, Any]) -> str:
     return str(from_.get("id") or "")
 
@@ -142,25 +171,35 @@ def load_comments_for_post(
     ids = _lookup_ids(post_id, aliases, [])
     for ident in ids:
         for comment in client.get_inbox_comments_raw(ident, max_items=100):
-            cid = str(comment.get("id") or "")
-            if cid:
-                merged[cid] = comment
+            _put_comment(merged, comment)
     extra = _lookup_ids(post_id, aliases, list(merged.values()))
     for ident in extra:
         if ident in ids:
             continue
         for comment in client.get_inbox_comments_raw(ident, max_items=100):
-            cid = str(comment.get("id") or "")
-            if cid:
-                merged[cid] = comment
+            _put_comment(merged, comment)
         ids.append(ident)
     reply_post_id = next((i for i in ids if i.startswith("urn:li:activity:")), post_id)
     return list(merged.values()), reply_post_id
 
 
+def _comment_reply_score(comment: dict[str, Any]) -> int:
+    replies = comment.get("replies") or []
+    return max(len(replies), int(comment.get("replyCount") or 0))
+
+
+def _put_comment(merged: dict[str, dict[str, Any]], comment: dict[str, Any]) -> None:
+    cid = str(comment.get("id") or "")
+    if not cid:
+        return
+    existing = merged.get(cid)
+    if existing is None or _comment_reply_score(comment) >= _comment_reply_score(existing):
+        merged[cid] = comment
+
+
 def collect_targets(client: ZernioClient, state: dict[str, Any]) -> list[dict[str, Any]]:
     replied = set(state.get("repliedCommentIds") or [])
-    aliases: dict[str, list[str]] = state.setdefault("postAliases", {})
+    aliases: dict[str, list[str]] = seed_aliases(state.setdefault("postAliases", {}))
     targets: list[dict[str, Any]] = []
     posts = client.list_inbox_posts(platform="linkedin", limit=50)
     published = client.list_posts(platform="linkedin", limit=50)
@@ -185,6 +224,11 @@ def collect_targets(client: ZernioClient, state: dict[str, Any]) -> list[dict[st
                         "commentCount": 0,
                     }
                 )
+    for share, activity in KNOWN_POST_PAIRS:
+        for pid in (activity, share):
+            if pid not in seen_ids:
+                seen_ids.add(pid)
+                feed.append({"id": pid, "content": "", "permalink": None, "commentCount": 0})
 
     for post in feed:
         post_id = str(post.get("id") or "")
@@ -192,9 +236,14 @@ def collect_targets(client: ZernioClient, state: dict[str, Any]) -> list[dict[st
             continue
         comments, reply_post_id = load_comments_for_post(client, post_id, aliases)
         learned = sorted(
-            {reply_post_id, *(_urns_in(" ".join(str(c.get("id") or "") for c in comments)))}
+            {
+                post_id,
+                reply_post_id,
+                *(_urns_in(" ".join(str(c.get("id") or "") for c in comments))),
+            }
         )
-        aliases[post_id] = learned
+        for urn in learned:
+            aliases[urn] = learned
         for comment in comments:
             cid = str(comment.get("id") or "")
             if not cid or cid in replied:
@@ -225,6 +274,16 @@ def collect_targets(client: ZernioClient, state: dict[str, Any]) -> list[dict[st
 
 
 def run_once(*, dry_run: bool = False, max_replies: int = 20) -> dict[str, Any]:
+    load_env()
+    lock = _state_lock()
+    try:
+        return _run_once_locked(dry_run=dry_run, max_replies=max_replies)
+    finally:
+        fcntl.flock(lock, fcntl.LOCK_UN)
+        lock.close()
+
+
+def _run_once_locked(*, dry_run: bool = False, max_replies: int = 20) -> dict[str, Any]:
     load_env()
     state = load_state()
     if "enabled" not in state:
@@ -364,5 +423,5 @@ def snapshot() -> dict[str, Any]:
         "unanswered": targets,
         "unansweredCount": len(unanswered_ids),
         "recentReplies": recent_replies(state),
-        "intervalSeconds": int(os.getenv("COMMENT_AUTOMATION_INTERVAL_SECONDS", "120")),
+        "intervalSeconds": int(os.getenv("COMMENT_AUTOMATION_INTERVAL_SECONDS", "30")),
     }

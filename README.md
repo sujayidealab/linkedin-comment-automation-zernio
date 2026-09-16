@@ -1,19 +1,23 @@
 # LinkedIn comment automation (Zernio)
 
-Watches **every LinkedIn post** on the connected Zernio account and auto-replies to new top-level comments. A worker runs every **2 minutes**.
+Watches **every LinkedIn post** on the connected Zernio account and auto-replies to new top-level comments. A worker runs every **30 seconds**.
 
 ```bash
 python3 -m pip install -r requirements.txt
 cp .env.example .env   # set ZERNIO_API_KEY
 python3 scripts/linkedin_comment_cron.py --once --dry-run
-python3 scripts/linkedin_comment_cron.py          # live loop, 120s
+python3 scripts/linkedin_comment_cron.py          # live loop, 30s
 npm install
 npm run dev -- --hostname 0.0.0.0 --port 43147
 ```
 
-The dashboard lists the **last 5 comments it replied to**. The worker skips your own comments and threads you already answered.
+The dashboard lists the **last 5 comments it replied to**. The worker skips your own comments and threads you already answered. It fetches both LinkedIn share and activity URNs because the share inbox can lag.
 
 Do not commit `.env`. Rotate the key if it was pasted in chat.
+
+## Railway (24/7)
+
+This repo is set up to run on Railway: `Dockerfile` + `railway.json` start both the dashboard and the comment worker. Railway must provide `ZERNIO_API_KEY` (and optionally `ZERNIO_LINKEDIN_ACCOUNT_ID`, `ZERNIO_OWNER_PERSON_ID`). Generate a public domain on the service after deploy.
 
 # LinkedIn skills + Zernio MCP
 

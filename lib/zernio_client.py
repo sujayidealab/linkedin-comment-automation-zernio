@@ -252,11 +252,18 @@ class ZernioClient:
 
     def list_inbox_posts(self, *, platform: str = "linkedin", limit: int = 50) -> list[dict[str, Any]]:
         account_id = self.resolve_linkedin_account_id()
-        params: dict[str, Any] = {"platform": platform, "limit": min(limit, 100)}
+        params: dict[str, Any] = {
+            "platform": platform,
+            "limit": min(limit, 100),
+            "_ts": int(time.time() * 1000),
+        }
         if account_id:
             params["accountId"] = account_id
         r = self._session.get(
-            f"{self.BASE_URL}/inbox/comments", params=params, timeout=self.timeout
+            f"{self.BASE_URL}/inbox/comments",
+            params=params,
+            headers={"Cache-Control": "no-cache", "Pragma": "no-cache"},
+            timeout=self.timeout,
         )
         payload = self._handle(r)
         rows = payload.get("data") or payload.get("posts") or []
@@ -271,7 +278,12 @@ class ZernioClient:
         pid = quote(_linkedin_post_id(post_id), safe="")
         r = self._session.get(
             f"{self.BASE_URL}/inbox/comments/{pid}",
-            params={"accountId": account_id, "limit": min(max_items, 100)},
+            params={
+                "accountId": account_id,
+                "limit": min(max_items, 100),
+                "_ts": int(time.time() * 1000),
+            },
+            headers={"Cache-Control": "no-cache", "Pragma": "no-cache"},
             timeout=self.timeout,
         )
         payload = self._handle(r)
@@ -334,7 +346,12 @@ class ZernioClient:
         pid = quote(_linkedin_post_id(post_id), safe="")
         r = self._session.get(
             f"{self.BASE_URL}/inbox/comments/{pid}",
-            params={"accountId": account_id, "limit": min(max_items, 100)},
+            params={
+                "accountId": account_id,
+                "limit": min(max_items, 100),
+                "_ts": int(time.time() * 1000),
+            },
+            headers={"Cache-Control": "no-cache", "Pragma": "no-cache"},
             timeout=self.timeout,
         )
         payload = self._handle(r)

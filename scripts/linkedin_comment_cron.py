@@ -31,7 +31,7 @@ def main() -> int:
     ap.add_argument(
         "--interval",
         type=int,
-        default=int(os.getenv("COMMENT_AUTOMATION_INTERVAL_SECONDS", "120")),
+        default=int(os.getenv("COMMENT_AUTOMATION_INTERVAL_SECONDS", "30")),
     )
     args = ap.parse_args()
 
@@ -66,7 +66,7 @@ def main() -> int:
                 print(f"  error: {err}", flush=True)
         except Exception as exc:
             print(f"run failed: {type(exc).__name__}: {exc}", flush=True)
-        time.sleep(max(args.interval, 30))
+        time.sleep(max(args.interval, 15))
 
 
 if __name__ == "__main__":
